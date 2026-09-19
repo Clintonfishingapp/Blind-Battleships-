@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blind Battleships Online</title>
+<style>
+  :root{
+    --navy:#0B1F33;
+    --navy-2:#132C47;
+    --panel:#173a5e;
+    --cream:#F4F1EA;
+    --coral:#FF7A57;
+    --coral-dark:#C24E30;
+    --ok:#7FD1AE;
+    --bad:#F2A6A6;
+    --line:#2E5378;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--navy);
+    color:var(--cream);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;
+    min-height:100vh;
+    padding:24px 16px 60px;
+  }
+  main{ max-width:520px; margin:0 auto; }
+  h1{ font-size:26px; font-weight:500; margin:0 0 4px; }
+  h2{ font-size:19px; font-weight:500; margin:0 0 14px; outline:none; }
+  .tag{ color:#9FC1E0; font-size:14px; margin:0 0 28px; }
+  .panel{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px; margin-bottom:16px; }
+  label{ display:block; font-size:14px; color:#CFE0EF; margin-bottom:6px; }
+  input[type=text], textarea{
+    width:100%; font-size:16px; padding:12px 14px; border-radius:8px;
+    border:1px solid var(--line); background:var(--navy-2); color:var(--cream); margin-bottom:14px;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  input[type=text]{ font-size:18px; font-family:inherit; }
+  textarea{ min-height:90px; resize:vertical; word-break:break-all; }
+  input:focus, textarea:focus, button:focus{ outline:3px solid var(--coral); outline-offset:2px; }
+  button{
+    font-size:16px; font-weight:500; padding:12px 18px; border-radius:8px;
+    border:1px solid var(--line); background:var(--navy-2); color:var(--cream);
+    cursor:pointer; margin:0 8px 8px 0;
+  }
+  button.primary{ background:var(--coral); border-color:var(--coral-dark); color:#3A1608; }
+  button.primary:hover{ background:#ff8c6c; }
+  button:hover{ background:#1e4468; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .row{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+  ul.log{ list-style:none; margin:0; padding:0; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:14px; }
+  ul.log li{ padding:8px 10px; border-bottom:1px solid var(--line); }
+  ul.log li:last-child{ border-bottom:none; }
+  .hit{ color:var(--bad); }
+  .miss{ color:#9FC1E0; }
+  .status{ font-size:14px; color:#9FC1E0; margin-bottom:10px; }
+  .error{ color:var(--bad); font-size:14px; margin:-6px 0 14px; }
+  .sr-live{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  .visible-announce{ background:var(--navy-2); border:1px solid var(--coral); border-radius:8px; padding:12px 14px; margin-bottom:16px; font-size:15px; }
+  .ship-list{ font-size:14px; color:#CFE0EF; margin:0 0 14px; padding-left:18px; }
+  .fine{ font-size:13px; color:#7FA0C4; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Blind battleships online</h1>
+  <p class="tag">Two boards, one game, any distance apart — no internet sync needed.</p>
+
+  <div id="app"></div>
+
+  <div class="sr-live" aria-live="polite" id="liveRegion"></div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  var COLS = "ABCDEFGHIJ";
+  var SHIPS = [
+    {name:"Destroyer", len:2}
+  ];
+  var TOTAL_CELLS = SHIPS.reduce(function(a,s){return a+s.len;},0);
+
+  var app = document.getElementById("app");
+  var live = document.getElementById("liveRegion");
+
+  var session = {
+    phase: "home",   // home | layout | placement | exchange | battle | gameover
+    role: localStorage.getItem("bb2_role") || null,   // p1 | p2
+    fleet: [],
+    shipIdx: 0,
+    error: "",
+    outgoingCode: localStorage.getItem("bb2_outgoing") || null,
+    state: null,
+    inAppWarning: isInAppBrowser()
+  };
+  try{
+    var savedState = localStorage.getItem("bb2_state");
+    if(savedState) session.state = JSON.parse(savedState);
+  }catch(e){ session.state = null; }
+
+  function announce(text){
+    live.textContent = "";
+    setTimeout(function(){ live.textContent = text; }, 30);
+  }
+  function otherRole(r){ return r === "p1" ? "p2" : "p1"; }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function saveProgress(){
+    if(session.role) localStorage.setItem("bb2_role", session.role);
+    if(session.state) localStorage.setItem("bb2_state", JSON.stringify(session.state));
+    if(session.outgoingCode) localStorage.setItem("bb2_outgoing", session.outgoingCode);
+    else localStorage.removeItem("bb2_outgoing");
+  }
+
+  function freshState(){
+    return { p1s:null, p2s:null, p1ready:false, p2ready:false, turn:null, log:[], winner:null };
+  }
+
+  function encodeState(st){
+    return "BB1-" + btoa(unescape(encodeURIComponent(JSON.stringify(st))));
+  }
+  function decodeState(code){
+    try{
+      var b = code.trim();
+      if(/^https?:\/\//i.test(b)){
+        var u = new URL(b);
+        var qp = u.searchParams.get("bb");
+        if(qp){ b = qp; }
+        else if(u.hash && u.hash.length > 1){ b = decodeURIComponent(u.hash.slice(1)); }
+        else { return null; }
+      }
+      if(b.indexOf("BB1-") === 0) b = b.slice(4);
+      var json = decodeURIComponent(escape(atob(b)));
+      var obj = JSON.parse(json);
+      if(typeof obj !== "object" || obj === null) return null;
+      return obj;
+    }catch(e){ return null; }
+  }
+  function tryAutoCopy(code){
+    try{
+      navigator.clipboard.writeText(shareUrlFor(code)).catch(function(){});
+    }catch(e){ /* ignore — Copy/Share buttons on the exchange screen still work */ }
+  }
+
+  function shareUrlFor(code){
+    return window.location.origin + window.location.pathname + "?bb=" + encodeURIComponent(code);
+  }
+
+  function parseCell(text){
+    var m = /^\s*([A-Ja-j])\s*-?\s*(10|[1-9])\s*$/.exec(text);
+    if(!m) return null;
+    var col = COLS.indexOf(m[1].toUpperCase());
+    var row = parseInt(m[2], 10);
+    return {col:col, row:row, key: COLS[col] + row};
+  }
+  function parsePlacement(text){
+    var m = /^\s*([A-Ja-j])\s*-?\s*(10|[1-9])\s*([HhVv])\s*$/.exec(text);
+    if(!m) return null;
+    var col = COLS.indexOf(m[1].toUpperCase());
+    var row = parseInt(m[2], 10);
+    var orient = m[3].toUpperCase();
+    return {col:col, row:row, orient:orient};
+  }
+  function shipCells(start, len){
+    var cells = [];
+    for(var i=0;i<len;i++){
+      var c = start.orient === "H" ? start.col + i : start.col;
+      var r = start.orient === "V" ? start.row + i : start.row;
+      if(c > 9 || r > 10) return null;
+      cells.push(COLS[c] + r);
+    }
+    return cells;
+  }
+  function fleetOccupied(fleet){
+    var set = {};
+    fleet.forEach(function(s){ s.cells.forEach(function(c){ set[c]=true; }); });
+    return set;
+  }
+
+  // ---------------- RENDER DISPATCH ----------------
+  function render(){
+    if(session.inAppWarning) return renderInAppWarning();
+    if(session.phase === "home") return renderHome();
+    if(session.phase === "layout") return renderLayout();
+    if(session.phase === "placement") return renderPlacement();
+    if(session.phase === "exchange") return renderExchange();
+    if(session.phase === "battle") return renderBattle();
+    if(session.phase === "gameover") return renderGameOver();
+  }
+  function focusHeading(){
+    var h = app.querySelector("h2");
+    if(h){ h.setAttribute("tabindex","-1"); h.focus(); }
+  }
+
+  // ---------------- IN-APP BROWSER WARNING ----------------
+  function renderInAppWarning(){
+    var steps;
+    if(isIOSDevice()){
+      steps = "Step 1: look at the top right corner of the screen and find three dots, or a share icon. " +
+              "Step 2: tap it. Step 3: choose the option called Open in Safari, or Open in Browser.";
+    } else if(isAndroidDevice()){
+      steps = "Step 1: look at the top right corner of the screen and find three dots. " +
+              "Step 2: tap the three dots. Step 3: choose the option called Open in Chrome, or Open in Browser.";
+    } else {
+      steps = "Look for a menu button, usually three dots, and choose Open in Browser or Open in Safari.";
+    }
+    app.innerHTML =
+      '<div class="panel">' +
+        '<h2>Important: open this in your regular browser first</h2>' +
+        '<p class="status">This link opened inside an app (like WhatsApp), not your normal browser. That can stop the game from saving your progress correctly.</p>' +
+        '<p class="status">' + steps + '</p>' +
+        '<p class="status">If that does not work, tap Copy link below, then open Safari or Chrome yourself and paste the link into the address bar at the top.</p>' +
+        '<button type="button" class="primary" id="copyEscapeBtn">Copy link</button>' +
+        '<button type="button" id="continueAnywayBtn">I understand the risk — continue here anyway</button>' +
+      '</div>';
+    focusHeading();
+    announce("This link opened inside an app, not your regular browser, which can stop the game saving your progress. " + steps + " Or tap Copy link and paste it into Safari or Chrome yourself.");
+    document.getElementById("copyEscapeBtn").onclick = async function(){
+      try{
+        await navigator.clipboard.writeText(window.location.href);
+        announce("Link copied. Now open Safari or Chrome and paste it into the address bar.");
+      }catch(e){
+        announce("Couldn't copy automatically. Please use your browser's own share or copy option for this page.");
+      }
+    };
+    document.getElementById("continueAnywayBtn").onclick = function(){
+      session.inAppWarning = false;
+      render();
+    };
+  }
+
+  function isInAppBrowser(){
+    var ua = navigator.userAgent || "";
+    return /\bWhatsApp\b/i.test(ua) || /FBAN|FBAV|FB_IAB|Instagram|Line\//i.test(ua);
+  }
+  function isAndroidDevice(){ return /Android/i.test(navigator.userAgent || ""); }
+  function isIOSDevice(){ return /iPhone|iPad|iPod/i.test(navigator.userAgent || ""); }
+
+  // ---------------- HOME ----------------
+  function renderHome(){
+    app.innerHTML =
+      '<div class="panel">' +
+        '<h2>Start or continue</h2>' +
+        '<p class="status">If your friend sent a link, just tap it. Otherwise, one of you starts a new game and the other pastes the code below.</p>' +
+        (session.error ? '<p class="error" role="alert">' + escapeHtml(session.error) + '</p>' : '') +
+        '<button type="button" class="primary" id="startNewBtn">Start a new game (I go first)</button>' +
+        '<label for="joinCodeInput">Or paste a code or link your friend sent you</label>' +
+        '<textarea id="joinCodeInput" autocomplete="off"></textarea>' +
+        '<button type="button" class="primary" id="joinLoadBtn">Load that code</button>' +
+      '</div>';
+    focusHeading();
+    document.getElementById("startNewBtn").onclick = function(){
+      session.role = "p1";
+      session.state = freshState();
+      session.error = "";
+      session.phase = "layout";
+      saveProgress();
+      render();
+    };
+    document.getElementById("joinLoadBtn").onclick = function(){
+      var code = document.getElementById("joinCodeInput").value;
+      var decoded = decodeState(code);
+      if(!decoded){
+        session.error = "That code didn't look right. Make sure you copied the whole thing.";
+        return render();
+      }
+      session.role = "p2";
+      session.state = decoded;
+      session.error = "";
+      session.outgoingCode = null;
+      saveProgress();
+      routeAfterStateChange();
+    };
+  }
+
+  // ---------------- ROUTING AFTER A STATE CHANGE ----------------
+  function routeAfterStateChange(){
+    var st = session.state;
+    var mineReady = session.role === "p1" ? st.p1ready : st.p2ready;
+    if(!mineReady){
+      session.fleet = [];
+      session.shipIdx = 0;
+      session.phase = "layout";
+    } else if(st.winner){
+      session.phase = "gameover";
+    } else if(st.turn === session.role){
+      session.phase = "battle";
+    } else {
+      session.phase = "exchange";
+    }
+    saveProgress();
+    render();
+  }
+
+  // ---------------- BOARD LAYOUT ----------------
+  var LAYOUT_TEXT =
+    "Board layout. The board has 10 columns and 10 rows. " +
+    "Columns are lettered A to J, left to right. " +
+    "Rows are numbered 1 to 10, top to bottom. " +
+    "Every cell is one letter followed by one number, for example C4 or J10. " +
+    "To place a ship, type the starting cell, then a space, then the letter H for horizontal or the letter V for vertical. " +
+    "Example: D7 H means start at column D, row 7, going horizontal, to the right. " +
+    "Example: D7 V means start at column D, row 7, going vertical, downward.";
+
+  function renderLayout(){
+    app.innerHTML =
+      '<div class="panel">' +
+        '<h2>Board layout</h2>' +
+        '<p class="status">The board is 10 columns by 10 rows.</p>' +
+        '<ul class="ship-list">' +
+          '<li>Columns are lettered A to J, left to right.</li>' +
+          '<li>Rows are numbered 1 to 10, top to bottom.</li>' +
+          '<li>Every cell is one letter then one number. Example: C4 or J10.</li>' +
+          '<li>To place a ship, type the exact format: cell, space, then H for horizontal or V for vertical.</li>' +
+          '<li>Example: D7 H — start at column D, row 7, going horizontal (to the right).</li>' +
+          '<li>Example: D7 V — start at column D, row 7, going vertical (downward).</li>' +
+        '</ul>' +
+        '<p class="status">There is 1 ship to place for this test game: Destroyer (2 cells).</p>' +
+        '<button type="button" class="primary" id="layoutContinueBtn">I understand — start placing ships</button>' +
+      '</div>';
+    focusHeading();
+    announce(LAYOUT_TEXT + " There is 1 ship to place for this test game. Destroyer, 2 cells.");
+    document.getElementById("layoutContinueBtn").onclick = function(){
+      session.phase = "placement";
+      render();
+    };
+  }
+
+  // ---------------- PLACEMENT ----------------
+  function renderPlacement(){
+    if(session.shipIdx >= SHIPS.length){
+      app.innerHTML =
+        '<div class="panel">' +
+          '<h2>Fleet placed</h2>' +
+          '<p class="status">All ' + SHIPS.length + ' ship(s) are down. Review, then continue.</p>' +
+          '<ul class="ship-list">' + session.fleet.map(function(s){
+            return "<li>" + s.name + " (" + s.len + " cells): " + s.cells.join(", ") + "</li>";
+          }).join("") + '</ul>' +
+          '<button type="button" id="undoBtn">Remove last ship</button>' +
+          '<button type="button" class="primary" id="readyBtn">Ready — get my code to send</button>' +
+        '</div>';
+      focusHeading();
+      document.getElementById("undoBtn").onclick = function(){
+        session.fleet.pop();
+        session.shipIdx--;
+        render();
+      };
+      document.getElementById("readyBtn").onclick = onReady;
+      return;
+    }
+
+    var ship = SHIPS[session.shipIdx];
+    app.innerHTML =
+      '<div class="panel">' +
+        '<h2>Place your ' + ship.name + ' (' + ship.len + ' cells)</h2>' +
+        '<p class="status">' + session.shipIdx + ' of ' + SHIPS.length + ' ships placed so far.</p>' +
+        '<label for="placeInput">Type the starting cell, a space, then H for horizontal or V for vertical. Example: D7 H</label>' +
+        '<input type="text" id="placeInput" autocomplete="off">' +
+        (session.error ? '<p class="error" role="alert">' + escapeHtml(session.error) + '</p>' : '') +
+        '<button type="button" class="primary" id="placeBtn">Place ship</button>' +
+      '</div>';
+    focusHeading();
+    announce("Place your " + ship.name + ", " + ship.len + " cells. Type the starting cell, a space, then H for horizontal or V for vertical. Example: D 7 H.");
+    var input = document.getElementById("placeInput");
+    input.focus();
+    input.addEventListener("keydown", function(e){ if(e.key==="Enter") doPlace(); });
+    document.getElementById("placeBtn").onclick = doPlace;
+
+    function doPlace(){
+      var parsed = parsePlacement(input.value);
+      if(!parsed){
+        session.error = 'Could not read that. Try a format like "D7 H".';
+        return render();
+      }
+      var cells = shipCells(parsed, ship.len);
+      if(!cells){
+        session.error = "That placement runs off the edge of the board. Try a different start cell or direction.";
+        return render();
+      }
+      var occupied = fleetOccupied(session.fleet);
+      var overlap = cells.some(function(c){ return occupied[c]; });
+      if(overlap){
+        session.error = "That overlaps a ship you already placed. Try another spot.";
+        return render();
+      }
+      session.error = "";
+      session.fleet.push({name: ship.name, len: ship.len, cells: cells});
+      session.shipIdx++;
+      render();
+    }
+  }
+
+  function onReady(){
+    var st = session.state;
+    var myShips = session.fleet.map(function(s){ return {n: s.name, c: s.cells}; });
+    if(session.role === "p1"){
+      st.p1s = myShips;
+      st.p1ready = true;
+    } else {
+      st.p2s = myShips;
+      st.p2ready = true;
+    }
+    if(st.p1ready && st.p2ready && !st.turn){
+      st.turn = "p1";
+    }
+    session.outgoingCode = encodeState(st);
+    saveProgress();
+    tryAutoCopy(session.outgoingCode);
+    announce("Fleet ready. Your code is ready to send.");
+    session.phase = "exchange";
+    render();
+  }
+
+  // ---------------- EXCHANGE (send / receive codes) ----------------
+  function renderExchange(){
+    var html = '<div class="panel"><h2>Send this to your friend</h2>';
+    if(session.outgoingCode){
+      var link = shareUrlFor(session.outgoingCode);
+      html +=
+        '<p class="status">Already copied for you. Tap Share and pick WhatsApp, Messages, or however you like to send it. Your friend just taps the link they receive — no pasting needed on their end.</p>' +
+        '<textarea id="outCode" readonly>' + escapeHtml(link) + '</textarea>' +
+        '<button type="button" class="primary" id="shareBtn">Share code</button>' +
+        '<button type="button" id="copyBtn">Copy link instead</button>' +
+        (session.error ? '<p class="error" role="alert">' + escapeHtml(session.error) + '</p>' : '');
+    } else {
+      html += '<p class="status">Nothing to send right now — waiting on your friend.</p>';
+    }
+    html += '</div>';
+
+    html +=
+      '<div class="panel">' +
+        '<h2>Got a code the manual way?</h2>' +
+        '<p class="fine">If your friend sent the link, just tap it — this box is only needed if they had to paste the raw code instead.</p>' +
+        '<label for="inCode">Paste the code or link your friend sent you</label>' +
+        '<textarea id="inCode" autocomplete="off"></textarea>' +
+        '<button type="button" class="primary" id="loadBtn">Load that code</button>' +
+      '</div>';
+
+    app.innerHTML = html;
+    focusHeading();
+    announce(session.outgoingCode
+      ? "Your move is ready to send. It has already been copied. Open your messaging app and paste it, or tap Share to pick where to send it."
+      : "Waiting for your friend's move. If they send a link, just tap it.");
+
+    if(session.outgoingCode){
+      var linkForShare = shareUrlFor(session.outgoingCode);
+      document.getElementById("shareBtn").onclick = async function(){
+        if(navigator.share){
+          try{
+            await navigator.share({ title: "Blind Battleships — your move", text: "Tap to take your turn:", url: linkForShare });
+          }catch(e){ /* user cancelled share — no error needed */ }
+        } else {
+          try{
+            await navigator.clipboard.writeText(linkForShare);
+            announce("Sharing isn't available on this browser — the link was copied instead. Paste it into your message.");
+          }catch(e){
+            document.getElementById("outCode").select();
+            announce("Sharing isn't available. The link is selected — use your keyboard's copy command.");
+          }
+        }
+      };
+      document.getElementById("copyBtn").onclick = async function(){
+        var ta = document.getElementById("outCode");
+        ta.select();
+        try{
+          await navigator.clipboard.writeText(linkForShare);
+          announce("Link copied.");
+        }catch(e){
+          announce("Couldn't copy automatically — the link is selected, use your keyboard's copy command.");
+        }
+      };
+    }
+
+    document.getElementById("loadBtn").onclick = function(){
+      var code = document.getElementById("inCode").value;
+      var decoded = decodeState(code);
+      if(!decoded){
+        session.error = "That code didn't look right. Make sure you copied the whole thing.";
+        return render();
+      }
+      var prevLogLen = session.state ? session.state.log.length : 0;
+      session.state = decoded;
+      session.outgoingCode = null;
+      session.error = "";
+      if(decoded.log.length > prevLogLen){
+        var newest = decoded.log[decoded.log.length - 1];
+        if(newest.by !== session.role){
+          announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
+        }
+      }
+      saveProgress();
+      routeAfterStateChange();
+    };
+  }
+
+  // ---------------- BATTLE (my turn to fire) ----------------
+  function renderBattle(){
+    var st = session.state;
+    var myShots = st.log.filter(function(e){ return e.by === session.role; });
+    var incoming = st.log.filter(function(e){ return e.by === otherRole(session.role); });
+
+    app.innerHTML =
+      '<div class="visible-announce">Your turn — call out a cell to fire on.</div>' +
+      '<div class="panel">' +
+        '<h2>Fire</h2>' +
+        '<label for="fireInput">Type the cell to fire on: one letter then one number. Example: D7</label>' +
+        '<input type="text" id="fireInput" autocomplete="off">' +
+        (session.error ? '<p class="error" role="alert">' + escapeHtml(session.error) + '</p>' : '') +
+        '<button type="button" class="primary" id="fireBtn">Fire</button>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<h2>Game log</h2>' +
+        '<button type="button" id="readMineBtn">Read my shots</button>' +
+        '<button type="button" id="readTheirsBtn">Read hits on my fleet</button>' +
+        '<ul class="log">' + renderLog(st.log) + '</ul>' +
+      '</div>';
+    focusHeading();
+    announce("Your turn. Type the cell to fire on: one letter then one number. Example: D7.");
+
+    var input = document.getElementById("fireInput");
+    input.focus();
+    input.addEventListener("keydown", function(e){ if(e.key==="Enter") doFire(); });
+    document.getElementById("fireBtn").onclick = doFire;
+    document.getElementById("readMineBtn").onclick = function(){
+      if(myShots.length===0){ announce("You haven't fired any shots yet."); return; }
+      announce("Your shots: " + myShots.map(function(e){ return e.cell + " " + e.result + (e.sunk?(", sank the "+e.sunk):""); }).join(". "));
+    };
+    document.getElementById("readTheirsBtn").onclick = function(){
+      if(incoming.length===0){ announce("Your fleet hasn't been fired on yet."); return; }
+      announce("Shots against your fleet: " + incoming.map(function(e){ return e.cell + " " + e.result + (e.sunk?(", they sank your "+e.sunk):""); }).join(". "));
+    };
+
+    function doFire(){
+      var cell = parseCell(input.value);
+      if(!cell){ session.error = 'Could not read that cell. Try a format like "D7".'; return renderBattle(); }
+      if(myShots.some(function(e){ return e.cell === cell.key; })){
+        session.error = "You already fired on " + cell.key + ". Pick a different cell.";
+        return renderBattle();
+      }
+      session.error = "";
+
+      var opponentShips = (session.role === "p1" ? st.p2s : st.p1s) || [];
+      var hitShip = null;
+      opponentShips.forEach(function(s){ if(s.c.indexOf(cell.key) !== -1) hitShip = s; });
+
+      var result = hitShip ? "hit" : "miss";
+      var sunk = null;
+      if(hitShip){
+        var priorHits = myShots.filter(function(e){ return e.result==="hit"; }).map(function(e){ return e.cell; });
+        var allHits = priorHits.concat([cell.key]);
+        var allSunk = hitShip.c.every(function(c){ return allHits.indexOf(c) !== -1; });
+        if(allSunk) sunk = hitShip.n;
+      }
+
+      st.log = st.log.concat([{by: session.role, cell: cell.key, result: result, sunk: sunk}]);
+      var totalHits = st.log.filter(function(e){ return e.by===session.role && e.result==="hit"; }).length;
+      if(totalHits >= TOTAL_CELLS) st.winner = session.role;
+      st.turn = st.winner ? st.turn : otherRole(session.role);
+
+      session.outgoingCode = encodeState(st);
+      saveProgress();
+      tryAutoCopy(session.outgoingCode);
+      announce(result === "hit" ? ("Hit at " + cell.key + (sunk ? (". You sank their " + sunk + "!") : "!")) : ("Miss at " + cell.key + "."));
+
+      if(st.winner){ session.phase = "gameover"; render(); }
+      else { session.phase = "exchange"; render(); }
+    }
+  }
+
+  function renderLog(log){
+    if(log.length===0) return '<li class="fine">No shots fired yet.</li>';
+    return log.slice().reverse().map(function(e){
+      var who = e.by === session.role ? "You" : "Friend";
+      var cls = e.result === "hit" ? "hit" : "miss";
+      return '<li class="' + cls + '">' + who + " fired on " + e.cell + ": " + e.result + (e.sunk ? (" — sank the " + e.sunk + "!") : "") + '</li>';
+    }).join("");
+  }
+
+  // ---------------- GAME OVER ----------------
+  function renderGameOver(){
+    var youWon = session.state.winner === session.role;
+    app.innerHTML =
+      '<div class="panel">' +
+        '<h2>' + (youWon ? "You won!" : "Your friend won") + '</h2>' +
+        '<p class="status">' + (youWon ? "Every cell of their fleet is hit." : "Every cell of your fleet is hit.") + '</p>' +
+        '<button type="button" class="primary" id="againBtn">Start a new game</button>' +
+      '</div>';
+    focusHeading();
+    announce(youWon ? "Game over. You won!" : "Game over. Your friend won.");
+    document.getElementById("againBtn").onclick = function(){
+      localStorage.removeItem("bb2_role");
+      localStorage.removeItem("bb2_state");
+      localStorage.removeItem("bb2_outgoing");
+      session.phase = "home";
+      session.role = null;
+      session.state = null;
+      session.outgoingCode = null;
+      session.fleet = [];
+      session.shipIdx = 0;
+      session.error = "";
+      render();
+    };
+  }
+
+  // ---------------- INITIAL ROUTE ----------------
+  (function handleIncomingLink(){
+    var incoming = null;
+    var params = new URLSearchParams(window.location.search);
+    if(params.has("bb")) incoming = params.get("bb");
+    else if(window.location.hash && window.location.hash.length > 1) incoming = decodeURIComponent(window.location.hash.slice(1));
+
+    if(incoming){
+      var decoded = decodeState(incoming);
+      if(decoded){
+        var localLen = session.state ? session.state.log.length : -1;
+        var isNewer = !session.state || decoded.log.length > localLen;
+        if(isNewer){
+          if(!session.role) session.role = "p2";
+          session.state = decoded;
+          session.outgoingCode = null;
+          saveProgress();
+        }
+      }
+      history.replaceState(null, "", window.location.pathname);
+    }
+  })();
+
+  if(session.role && session.state){
+    routeAfterStateChange();
+    if(session.phase === "exchange" && !session.outgoingCode){
+      render();
+    }
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>
