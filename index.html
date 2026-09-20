@@ -185,21 +185,55 @@
   function playWhistle(){
     var ctx = getAudioCtx(); if(!ctx) return;
     var now = ctx.currentTime;
+    var dur = 1.7;
+
     var osc = ctx.createOscillator();
-    var gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(1800, now);
-    osc.frequency.exponentialRampToValueAtTime(500, now + 0.5);
+    osc.frequency.setValueAtTime(2400, now);
+    osc.frequency.exponentialRampToValueAtTime(350, now + dur);
+
+    var vibrato = ctx.createOscillator();
+    vibrato.frequency.value = 7;
+    var vibratoGain = ctx.createGain();
+    vibratoGain.gain.value = 15;
+    vibrato.connect(vibratoGain);
+    vibratoGain.connect(osc.frequency);
+
+    var gain = ctx.createGain();
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.25, now + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    gain.gain.exponentialRampToValueAtTime(0.28, now + 0.08);
+    gain.gain.setValueAtTime(0.28, now + dur - 0.3);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
     osc.connect(gain); gain.connect(ctx.destination);
-    osc.start(now); osc.stop(now + 0.6);
+    osc.start(now); osc.stop(now + dur + 0.05);
+    vibrato.start(now); vibrato.stop(now + dur + 0.05);
+
+    var bufferSize = Math.floor(ctx.sampleRate * dur);
+    var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for(var i=0;i<bufferSize;i++){ data[i] = Math.random()*2-1; }
+    var noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    var bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(2500, now);
+    bp.frequency.exponentialRampToValueAtTime(400, now + dur);
+    bp.Q.value = 3;
+    var noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.05, now + 0.1);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    noise.connect(bp); bp.connect(noiseGain); noiseGain.connect(ctx.destination);
+    noise.start(now); noise.stop(now + dur);
   }
+
   function playExplosion(){
     var ctx = getAudioCtx(); if(!ctx) return;
     var now = ctx.currentTime;
-    var bufferSize = Math.floor(ctx.sampleRate * 0.6);
+    var dur = 3.4;
+
+    var bufferSize = Math.floor(ctx.sampleRate * dur);
     var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     var data = buffer.getChannelData(0);
     for(var i=0;i<bufferSize;i++){ data[i] = Math.random()*2-1; }
@@ -207,23 +241,46 @@
     noise.buffer = buffer;
     var filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
-    filter.frequency.setValueAtTime(3000, now);
-    filter.frequency.exponentialRampToValueAtTime(80, now + 0.5);
+    filter.frequency.setValueAtTime(6000, now);
+    filter.frequency.exponentialRampToValueAtTime(50, now + dur);
     var noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.6, now);
-    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    noiseGain.gain.setValueAtTime(0.9, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     noise.connect(filter); filter.connect(noiseGain); noiseGain.connect(ctx.destination);
-    noise.start(now); noise.stop(now + 0.6);
+    noise.start(now); noise.stop(now + dur);
 
-    var thump = ctx.createOscillator();
-    var thumpGain = ctx.createGain();
-    thump.type = "sine";
-    thump.frequency.setValueAtTime(120, now);
-    thump.frequency.exponentialRampToValueAtTime(40, now + 0.3);
-    thumpGain.gain.setValueAtTime(0.5, now);
-    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-    thump.connect(thumpGain); thumpGain.connect(ctx.destination);
-    thump.start(now); thump.stop(now + 0.4);
+    [[55, 0], [90, 0.02]].forEach(function(pair){
+      var f = pair[0], delay = pair[1];
+      var t0 = now + delay;
+      var thump = ctx.createOscillator();
+      var thumpGain = ctx.createGain();
+      thump.type = "sine";
+      thump.frequency.setValueAtTime(f, t0);
+      thump.frequency.exponentialRampToValueAtTime(f * 0.3, t0 + 1.2);
+      thumpGain.gain.setValueAtTime(0.7, t0);
+      thumpGain.gain.exponentialRampToValueAtTime(0.001, t0 + 1.6);
+      thump.connect(thumpGain); thumpGain.connect(ctx.destination);
+      thump.start(t0); thump.stop(t0 + 1.7);
+    });
+
+    for(var k=0;k<5;k++){
+      var t = now + Math.random() * 0.35;
+      var burstLen = 0.03 + Math.random() * 0.03;
+      var bSize = Math.floor(ctx.sampleRate * burstLen);
+      var bBuf = ctx.createBuffer(1, bSize, ctx.sampleRate);
+      var bData = bBuf.getChannelData(0);
+      for(var j=0;j<bSize;j++){ bData[j] = Math.random()*2-1; }
+      var bSrc = ctx.createBufferSource();
+      bSrc.buffer = bBuf;
+      var bFilter = ctx.createBiquadFilter();
+      bFilter.type = "highpass";
+      bFilter.frequency.value = 2000 + Math.random() * 2000;
+      var bGain = ctx.createGain();
+      bGain.gain.setValueAtTime(0.15, t);
+      bGain.gain.exponentialRampToValueAtTime(0.001, t + burstLen);
+      bSrc.connect(bFilter); bFilter.connect(bGain); bGain.connect(ctx.destination);
+      bSrc.start(t); bSrc.stop(t + burstLen);
+    }
   }
 
   // ---------------- RENDER DISPATCH ----------------
@@ -384,7 +441,12 @@
   function ensureBattleStarted(){
     if(startAttempted || !roomRef) return;
     startAttempted = true;
-    roomRef.update({turn:"p1", log:[], winner:null, started:true}).catch(function(){ startAttempted = false; });
+    roomRef.update({turn:"p1", log:[], winner:null, started:true}).then(function(){
+      if(roomDoc){
+        roomDoc.turn = "p1"; roomDoc.log = []; roomDoc.winner = null; roomDoc.started = true;
+        reconcile(0);
+      }
+    }).catch(function(){ startAttempted = false; });
   }
 
   function reconcile(prevLen){
@@ -507,7 +569,11 @@
     patch[session.slot + "/ready"] = true;
     patch[session.slot + "/fleet"] = fleetForDb;
     roomRef.update(patch).then(function(){
-      reconcile(roomDoc ? roomDoc.log.length : 0);
+      if(!roomDoc) roomDoc = freshRoom();
+      if(!roomDoc[session.slot]) roomDoc[session.slot] = {token: myToken, ready:false, fleet:null};
+      roomDoc[session.slot].ready = true;
+      roomDoc[session.slot].fleet = fleetForDb;
+      reconcile(roomDoc.log.length);
     }).catch(function(e){
       session.error = "Couldn't save your fleet (" + describeError(e) + "). Check your connection and try again.";
       render();
