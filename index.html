@@ -350,6 +350,8 @@
       if(mine.ready && mine.fleet && mine.fleet.length === SHIPS.length){
         session.fleet = mine.fleet.map(function(s){ return {name:s.n, len:s.c.length, cells:s.c}; });
         session.shipIdx = SHIPS.length;
+        roomDoc = data;
+        reconcile(data.log.length);
       } else {
         session.phase = "layout";
         render();
@@ -505,8 +507,7 @@
     patch[session.slot + "/ready"] = true;
     patch[session.slot + "/fleet"] = fleetForDb;
     roomRef.update(patch).then(function(){
-      session.phase = "waiting";
-      render();
+      reconcile(roomDoc ? roomDoc.log.length : 0);
     }).catch(function(e){
       session.error = "Couldn't save your fleet (" + describeError(e) + "). Check your connection and try again.";
       render();
