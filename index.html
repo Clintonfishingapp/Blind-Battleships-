@@ -455,7 +455,14 @@
     var other = roomDoc[otherSlot(session.slot)];
 
     if(!roomDoc.started){
-      if(mine && mine.ready && other && other.ready) ensureBattleStarted();
+      if(!mine || !mine.ready){
+        session.fleet = [];
+        session.shipIdx = 0;
+        session.phase = "layout";
+        render();
+        return;
+      }
+      if(other && other.ready) ensureBattleStarted();
       session.phase = "waiting";
       render();
       return;
