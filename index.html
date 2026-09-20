@@ -159,6 +159,13 @@
       }
     }catch(e){ /* speech not available — the aria-live region still covers screen readers */ }
   }
+  // Some Android browsers silently stop firing speechSynthesis after a period of inactivity.
+  // A periodic no-op resume() call prevents the engine from going to sleep during long waits.
+  if(window.speechSynthesis){
+    setInterval(function(){
+      try{ window.speechSynthesis.resume(); }catch(e){}
+    }, 8000);
+  }
   function announce(text){
     live.textContent = "";
     setTimeout(function(){ live.textContent = text; }, 30);
