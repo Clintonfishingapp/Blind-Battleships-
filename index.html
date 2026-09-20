@@ -549,8 +549,9 @@
       if(!mine || !mine.ready){
         session.fleet = [];
         session.shipIdx = 0;
-        session.phase = "layout";
-        render();
+        session.phase = "seat";
+        session.occupancy = null;
+        onSeatChosen(session.slot);
         return;
       }
       if(other && other.ready) ensureBattleStarted();
@@ -572,12 +573,16 @@
         playWhistle();
         if(newest.result === "hit") setTimeout(playExplosion, 900);
         var msg = "Your friend fired on " + newest.cell + ": " + newest.result + (newest.result === "hit" ? (" — your " + newest.ship) : "") + (newest.sunk ? (", sinking your " + newest.sunk + "!") : ".");
-        if(roomDoc.turn === session.slot){ msg += " Your turn — call out a cell to fire on."; }
+        if(roomDoc.turn === session.slot){
+          msg += " Your turn — call out a cell to fire on.";
+          try{ if(navigator.vibrate) navigator.vibrate([200,100,200]); }catch(e){}
+        }
         announce(msg);
         lastTurnAnnounceKey = turnKey;
       }
     } else if(roomDoc.turn === session.slot && turnKey !== lastTurnAnnounceKey){
       lastTurnAnnounceKey = turnKey;
+      try{ if(navigator.vibrate) navigator.vibrate([200,100,200]); }catch(e){}
       announce("Your turn — call out a cell to fire on.");
     }
     render();
