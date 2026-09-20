@@ -129,6 +129,7 @@
   var roomListener = null;
   var roomDoc = null;
   var lastLogLen = -1;
+  var lastTurnAnnounceKey = null;
   var startAttempted = false;
 
   var voiceEnabled = localStorage.getItem("bb3_voice") !== "off";
@@ -405,13 +406,20 @@
   }
 
   // ---------------- STEP 2: CHOOSE SEAT ----------------
+  function seatStatusText(occ){
+    if(!occ) return "Checking who has already joined...";
+    if(occ.p1 && occ.p2) return "Both seats are taken.";
+    if(occ.p1) return "Player 2 is available.";
+    if(occ.p2) return "Player 1 is available.";
+    return "Both Player 1 and Player 2 are available.";
+  }
+
   function renderSeatStep(){
     var occ = session.occupancy;
     app.innerHTML =
       '<div class="panel">' +
         '<h2>Choose your seat — room ' + escapeHtml(session.code) + '</h2>' +
-        (occ ? '<p class="status">Player 1 is ' + (occ.p1 ? "taken" : "available") + '. Player 2 is ' + (occ.p2 ? "taken" : "available") + '.</p>'
-             : '<p class="status">Checking who has already joined...</p>') +
+        '<p class="status">' + seatStatusText(occ) + '</p>' +
         (session.joining ? '<p class="status" role="status">Joining as ' + (session.joining === "p1" ? "Player 1" : "Player 2") + '... please wait.</p>' : '') +
         '<div class="row" role="group" aria-label="Choose your seat">' +
           '<button type="button" class="seat-btn" id="seatP1"' + (session.joining ? ' disabled' : '') + '>Player 1</button>' +
@@ -422,6 +430,7 @@
       '</div>';
     focusHeading();
     if(session.joining){ announce("Joining as " + (session.joining === "p1" ? "Player 1" : "Player 2") + ". Please wait."); return; }
+    if(occ) announce(seatStatusText(occ) + " Choose Player 1 or Player 2.");
     document.getElementById("seatP1").onclick = function(){ onSeatChosen("p1"); };
     document.getElementById("seatP2").onclick = function(){ onSeatChosen("p2"); };
     document.getElementById("backBtn").onclick = function(){
@@ -542,13 +551,20 @@
       return;
     }
     session.phase = "battle";
+    var turnKey = roomDoc.turn + ":" + roomDoc.log.length;
     if(roomDoc.log.length > prevLen){
       var newest = roomDoc.log[roomDoc.log.length - 1];
       if(newest.by !== session.slot){
         playWhistle();
         if(newest.result === "hit") setTimeout(playExplosion, 900);
-        announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.result === "hit" ? (" — your " + newest.ship) : "") + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
+        var msg = "Your friend fired on " + newest.cell + ": " + newest.result + (newest.result === "hit" ? (" — your " + newest.ship) : "") + (newest.sunk ? (", sinking your " + newest.sunk + "!") : ".");
+        if(roomDoc.turn === session.slot){ msg += " Your turn — call out a cell to fire on."; }
+        announce(msg);
+        lastTurnAnnounceKey = turnKey;
       }
+    } else if(roomDoc.turn === session.slot && turnKey !== lastTurnAnnounceKey){
+      lastTurnAnnounceKey = turnKey;
+      announce("Your turn — call out a cell to fire on.");
     }
     render();
   }
@@ -831,7 +847,7 @@
     document.getElementById("againBtn").onclick = function(){
       if(roomRef) roomRef.set(freshRoom()).catch(function(){});
       if(roomListener && roomRef) roomRef.off("value", roomListener);
-      roomRef = null; roomListener = null; roomDoc = null; startAttempted = false;
+      roomRef = null; roomListener = null; roomDoc = null; startAttempted = false; lastTurnAnnounceKey = null;
       localStorage.removeItem("bb3_code");
       localStorage.removeItem("bb3_slot");
       session.phase = "code"; session.code = ""; session.slot = "";
