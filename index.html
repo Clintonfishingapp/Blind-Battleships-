@@ -154,8 +154,8 @@
   function shipCells(start, len){
     var cells = [];
     for(var i=0;i<len;i++){
-      var c = start.orient === "H" ? start.col + i : start.col;
-      var r = start.orient === "V" ? start.row + i : start.row;
+      var c = start.orient === "V" ? start.col + i : start.col;
+      var r = start.orient === "H" ? start.row + i : start.row;
       if(c > 9 || r > 10) return null;
       cells.push(COLS[c] + r);
     }
@@ -170,6 +170,60 @@
     if(e && e.code) return e.code;
     if(e && e.message) return e.message;
     return "unknown error";
+  }
+
+  // ---------------- SOUND EFFECTS ----------------
+  var audioCtx = null;
+  function getAudioCtx(){
+    if(!audioCtx){
+      try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch(e){ return null; }
+    }
+    if(audioCtx.state === "suspended"){ audioCtx.resume().catch(function(){}); }
+    return audioCtx;
+  }
+  function playWhistle(){
+    var ctx = getAudioCtx(); if(!ctx) return;
+    var now = ctx.currentTime;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(1800, now);
+    osc.frequency.exponentialRampToValueAtTime(500, now + 0.5);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.25, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); osc.stop(now + 0.6);
+  }
+  function playExplosion(){
+    var ctx = getAudioCtx(); if(!ctx) return;
+    var now = ctx.currentTime;
+    var bufferSize = Math.floor(ctx.sampleRate * 0.6);
+    var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for(var i=0;i<bufferSize;i++){ data[i] = Math.random()*2-1; }
+    var noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    var filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(3000, now);
+    filter.frequency.exponentialRampToValueAtTime(80, now + 0.5);
+    var noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.6, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    noise.connect(filter); filter.connect(noiseGain); noiseGain.connect(ctx.destination);
+    noise.start(now); noise.stop(now + 0.6);
+
+    var thump = ctx.createOscillator();
+    var thumpGain = ctx.createGain();
+    thump.type = "sine";
+    thump.frequency.setValueAtTime(120, now);
+    thump.frequency.exponentialRampToValueAtTime(40, now + 0.3);
+    thumpGain.gain.setValueAtTime(0.5, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    thump.connect(thumpGain); thumpGain.connect(ctx.destination);
+    thump.start(now); thump.stop(now + 0.4);
   }
 
   // ---------------- RENDER DISPATCH ----------------
@@ -352,6 +406,7 @@
     if(roomDoc.log.length > prevLen){
       var newest = roomDoc.log[roomDoc.log.length - 1];
       if(newest.by !== session.slot){
+        if(newest.result === "hit") playExplosion();
         announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
       }
     }
@@ -360,26 +415,26 @@
 
   // ---------------- BOARD LAYOUT ----------------
   var LAYOUT_TEXT =
-    "Board layout. The board has 10 columns and 10 rows. " +
-    "Columns are lettered A to J, left to right. " +
-    "Rows are numbered 1 to 10, top to bottom. " +
+    "Board layout. The board has 10 rows and 10 columns. " +
+    "Rows are lettered A to J, top to bottom. " +
+    "Columns are numbered 1 to 10, left to right. " +
     "Every cell is one letter followed by one number, for example C4 or J10. " +
     "To place a ship, type the starting cell, then a space, then the letter H for horizontal or the letter V for vertical. " +
-    "Example: D7 H means start at column D, row 7, going horizontal, to the right. " +
-    "Example: D7 V means start at column D, row 7, going vertical, downward.";
+    "Example: D7 H means start at row D, column 7, going horizontal, across the columns to the right. " +
+    "Example: D7 V means start at row D, column 7, going vertical, down through the rows.";
 
   function renderLayout(){
     app.innerHTML =
       '<div class="panel">' +
         '<h2>Board layout</h2>' +
-        '<p class="status">The board is 10 columns by 10 rows.</p>' +
+        '<p class="status">The board is 10 rows by 10 columns.</p>' +
         '<ul class="ship-list">' +
-          '<li>Columns are lettered A to J, left to right.</li>' +
-          '<li>Rows are numbered 1 to 10, top to bottom.</li>' +
+          '<li>Rows are lettered A to J, top to bottom.</li>' +
+          '<li>Columns are numbered 1 to 10, left to right.</li>' +
           '<li>Every cell is one letter then one number. Example: C4 or J10.</li>' +
           '<li>To place a ship, type the exact format: cell, space, then H for horizontal or V for vertical.</li>' +
-          '<li>Example: D7 H — start at column D, row 7, going horizontal (to the right).</li>' +
-          '<li>Example: D7 V — start at column D, row 7, going vertical (downward).</li>' +
+          '<li>Example: D7 H — start at row D, column 7, going horizontal (across the columns, to the right).</li>' +
+          '<li>Example: D7 V — start at row D, column 7, going vertical (down through the rows).</li>' +
         '</ul>' +
         '<p class="status">There is 1 ship to place for this test game: Destroyer (2 cells).</p>' +
         '<button type="button" class="primary" id="layoutContinueBtn">I understand — start placing ships</button>' +
@@ -488,6 +543,11 @@
           : '<p class="status">The board updates automatically the moment your friend fires.</p>') +
       '</div>' +
       '<div class="panel">' +
+        '<h2>My fleet</h2>' +
+        '<button type="button" id="readFleetBtn">Read my fleet</button>' +
+        '<ul class="ship-list">' + renderMyFleet(st, incoming) + '</ul>' +
+      '</div>' +
+      '<div class="panel">' +
         '<h2>Game log</h2>' +
         '<button type="button" id="readMineBtn">Read my shots</button>' +
         '<button type="button" id="readTheirsBtn">Read hits on my fleet</button>' +
@@ -500,6 +560,15 @@
       input.addEventListener("keydown", function(e){ if(e.key==="Enter") doFire(); });
       document.getElementById("fireBtn").onclick = doFire;
     }
+    document.getElementById("readFleetBtn").onclick = function(){
+      var mine = (st[session.slot] && st[session.slot].fleet) || [];
+      if(mine.length===0){ announce("No fleet data found."); return; }
+      var hitCells = incoming.filter(function(e){ return e.result==="hit"; }).map(function(e){ return e.cell; });
+      announce("Your fleet: " + mine.map(function(s){
+        var status = s.c.every(function(c){ return hitCells.indexOf(c) !== -1; }) ? "sunk" : "afloat";
+        return s.n + " at " + s.c.join(", ") + ", " + status;
+      }).join(". "));
+    };
     document.getElementById("readMineBtn").onclick = function(){
       if(myShots.length===0){ announce("You haven't fired any shots yet."); return; }
       announce("Your shots: " + myShots.map(function(e){ return e.cell + " " + e.result + (e.sunk?(", sank the "+e.sunk):""); }).join(". "));
@@ -518,6 +587,7 @@
         return renderBattle();
       }
       session.error = "";
+      playWhistle();
 
       var opponent = st[otherSlot(session.slot)];
       var fleet = (opponent && opponent.fleet) || [];
@@ -538,12 +608,24 @@
       var nextTurn = winner ? st.turn : otherSlot(session.slot);
 
       roomRef.update({log: newLog, winner: winner, turn: nextTurn}).then(function(){
+        if(result === "hit") playExplosion();
         announce(result === "hit" ? ("Hit at " + cell.key + (sunk ? (". You sank their " + sunk + "!") : "!")) : ("Miss at " + cell.key + "."));
       }).catch(function(e){
         session.error = "Couldn't send that shot (" + describeError(e) + "). Check your connection and try again.";
         renderBattle();
       });
     }
+  }
+
+  function renderMyFleet(st, incoming){
+    var mine = (st[session.slot] && st[session.slot].fleet) || [];
+    if(mine.length===0) return '<li class="fine">No fleet data.</li>';
+    var hitCells = incoming.filter(function(e){ return e.result==="hit"; }).map(function(e){ return e.cell; });
+    return mine.map(function(s){
+      var cellsText = s.c.map(function(c){ return hitCells.indexOf(c) !== -1 ? c + " (hit)" : c; }).join(", ");
+      var sunk = s.c.every(function(c){ return hitCells.indexOf(c) !== -1; });
+      return "<li>" + s.n + ": " + cellsText + (sunk ? " — sunk" : "") + "</li>";
+    }).join("");
   }
 
   function renderLog(log){
