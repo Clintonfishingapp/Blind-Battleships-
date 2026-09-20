@@ -130,6 +130,7 @@
   var roomDoc = null;
   var lastLogLen = -1;
   var lastTurnAnnounceKey = null;
+  var lastSeatAnnounceKey = null;
   var startAttempted = false;
 
   var voiceEnabled = localStorage.getItem("bb3_voice") !== "off";
@@ -430,11 +431,17 @@
       '</div>';
     focusHeading();
     if(session.joining){ announce("Joining as " + (session.joining === "p1" ? "Player 1" : "Player 2") + ". Please wait."); return; }
-    if(occ) announce(seatStatusText(occ) + " Choose Player 1 or Player 2.");
+    if(occ){
+      var occKey = occ.p1 + ":" + occ.p2;
+      if(occKey !== lastSeatAnnounceKey){
+        lastSeatAnnounceKey = occKey;
+        announce(seatStatusText(occ) + " Choose Player 1 or Player 2.");
+      }
+    }
     document.getElementById("seatP1").onclick = function(){ onSeatChosen("p1"); };
     document.getElementById("seatP2").onclick = function(){ onSeatChosen("p2"); };
     document.getElementById("backBtn").onclick = function(){
-      session.phase = "code"; session.error = ""; render();
+      session.phase = "code"; session.error = ""; session.occupancy = null; lastSeatAnnounceKey = null; render();
     };
   }
 
@@ -611,16 +618,21 @@
         '<div class="panel">' +
           '<h2>Fleet placed</h2>' +
           '<p class="status">Your fleet has been placed automatically. Review, then start the battle — or shuffle for a new random layout.</p>' +
+          '<p class="fine">Positions aren\'t read aloud automatically, in case your friend is nearby. Tap "Read my fleet" if you want to hear them.</p>' +
           '<ul class="ship-list">' + session.fleet.map(function(s){
             return "<li>" + s.name + " (" + s.len + " cells): " + s.cells.join(", ") + "</li>";
           }).join("") + '</ul>' +
+          '<button type="button" id="readPlacedFleetBtn">Read my fleet</button>' +
           '<button type="button" id="shuffleBtn">Shuffle — place again</button>' +
           '<button type="button" class="primary" id="readyBtn">Start battle</button>' +
         '</div>';
       focusHeading();
-      announce("Your fleet has been placed. " + session.fleet.map(function(s){
-        return s.name + " at " + s.cells.join(", ");
-      }).join(". ") + ". Start the battle, or shuffle for a new layout.");
+      announce("Your fleet has been placed. Positions are shown on screen but not read aloud automatically, in case your friend is nearby. Tap Read my fleet if you want to hear them, or start the battle.");
+      document.getElementById("readPlacedFleetBtn").onclick = function(){
+        announce("Your fleet: " + session.fleet.map(function(s){
+          return s.name + " at " + s.cells.join(", ");
+        }).join(". ") + ".");
+      };
       document.getElementById("shuffleBtn").onclick = function(){
         session.fleet = randomPlaceFleet();
         render();
@@ -847,7 +859,7 @@
     document.getElementById("againBtn").onclick = function(){
       if(roomRef) roomRef.set(freshRoom()).catch(function(){});
       if(roomListener && roomRef) roomRef.off("value", roomListener);
-      roomRef = null; roomListener = null; roomDoc = null; startAttempted = false; lastTurnAnnounceKey = null;
+      roomRef = null; roomListener = null; roomDoc = null; startAttempted = false; lastTurnAnnounceKey = null; lastSeatAnnounceKey = null;
       localStorage.removeItem("bb3_code");
       localStorage.removeItem("bb3_slot");
       session.phase = "code"; session.code = ""; session.slot = "";
