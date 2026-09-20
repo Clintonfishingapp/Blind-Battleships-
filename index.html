@@ -691,13 +691,16 @@
 
   // ---------------- WAITING ----------------
   function renderWaiting(){
+    var otherReady = roomDoc && roomDoc[otherSlot(session.slot)] && roomDoc[otherSlot(session.slot)].ready;
     app.innerHTML =
       '<div class="panel">' +
-        '<h2>Waiting for your friend</h2>' +
-        '<p class="status">This updates automatically as soon as they finish.</p>' +
+        '<h2>' + (otherReady ? "Starting the battle" : "Waiting for your friend") + '</h2>' +
+        '<p class="status">' + (otherReady ? "Both fleets are ready — this updates automatically." : "This updates automatically as soon as they finish.") + '</p>' +
       '</div>';
     focusHeading();
-    announce("Your fleet is set. Waiting for your friend to finish placing their ships.");
+    announce(otherReady
+      ? "Both fleets are ready. Starting the battle."
+      : "Your fleet is set. Waiting for your friend to finish placing their ships.");
   }
 
   // ---------------- BATTLE ----------------
