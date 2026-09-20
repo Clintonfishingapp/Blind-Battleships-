@@ -547,7 +547,7 @@
       if(newest.by !== session.slot){
         playWhistle();
         if(newest.result === "hit") setTimeout(playExplosion, 900);
-        announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
+        announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.result === "hit" ? (" — your " + newest.ship) : "") + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
       }
     }
     render();
@@ -696,6 +696,11 @@
         '<ul class="ship-list">' + renderMyFleet(st, incoming) + '</ul>' +
       '</div>' +
       '<div class="panel">' +
+        '<h2>Hits on opponent</h2>' +
+        '<button type="button" id="readOpponentBtn">Read hits on opponent</button>' +
+        '<ul class="ship-list">' + renderOpponentHits(myShots) + '</ul>' +
+      '</div>' +
+      '<div class="panel">' +
         '<h2>Game log</h2>' +
         '<button type="button" id="readMineBtn">Read my shots</button>' +
         '<button type="button" id="readTheirsBtn">Read hits on my fleet</button>' +
@@ -717,13 +722,23 @@
         return s.n + " at " + s.c.join(", ") + ", " + status;
       }).join(". "));
     };
+    document.getElementById("readOpponentBtn").onclick = function(){
+      if(myShots.length===0){ announce("You haven't fired any shots yet."); return; }
+      var hits = myShots.filter(function(e){ return e.result==="hit"; });
+      var misses = myShots.filter(function(e){ return e.result==="miss"; });
+      var sunkShips = myShots.filter(function(e){ return e.sunk; }).map(function(e){ return e.sunk; });
+      var summary = "You've fired " + myShots.length + " shots: " + hits.length + " hits, " + misses.length + " misses.";
+      if(sunkShips.length){ summary += " Sunk so far: " + sunkShips.join(", ") + "."; }
+      if(hits.length){ summary += " Hit cells: " + hits.map(function(e){ return e.cell + " (" + e.ship + ")" + (e.sunk ? (" — sank it" ) : ""); }).join(", ") + "."; }
+      announce(summary);
+    };
     document.getElementById("readMineBtn").onclick = function(){
       if(myShots.length===0){ announce("You haven't fired any shots yet."); return; }
-      announce("Your shots: " + myShots.map(function(e){ return e.cell + " " + e.result + (e.sunk?(", sank the "+e.sunk):""); }).join(". "));
+      announce("Your shots: " + myShots.map(function(e){ return e.cell + " " + e.result + (e.result==="hit" ? (" on their " + e.ship) : "") + (e.sunk?(", sank it"):""); }).join(". "));
     };
     document.getElementById("readTheirsBtn").onclick = function(){
       if(incoming.length===0){ announce("Your fleet hasn't been fired on yet."); return; }
-      announce("Shots against your fleet: " + incoming.map(function(e){ return e.cell + " " + e.result + (e.sunk?(", they sank your "+e.sunk):""); }).join(". "));
+      announce("Shots against your fleet: " + incoming.map(function(e){ return e.cell + " " + e.result + (e.result==="hit" ? (" on your " + e.ship) : "") + (e.sunk?(", they sank it"):""); }).join(". "));
     };
 
     function doFire(){
@@ -750,14 +765,14 @@
         if(hitShip.c.every(function(c){ return allHits.indexOf(c) !== -1; })) sunk = hitShip.n;
       }
 
-      var newLog = st.log.concat([{by: session.slot, cell: cell.key, result: result, sunk: sunk}]);
+      var newLog = st.log.concat([{by: session.slot, cell: cell.key, result: result, ship: hitShip ? hitShip.n : null, sunk: sunk}]);
       var totalHits = newLog.filter(function(e){ return e.by===session.slot && e.result==="hit"; }).length;
       var winner = totalHits >= TOTAL_CELLS ? session.slot : null;
       var nextTurn = winner ? st.turn : otherSlot(session.slot);
 
       roomRef.update({log: newLog, winner: winner, turn: nextTurn}).then(function(){
         if(result === "hit") setTimeout(playExplosion, 900);
-        announce(result === "hit" ? ("Hit at " + cell.key + (sunk ? (". You sank their " + sunk + "!") : "!")) : ("Miss at " + cell.key + "."));
+        announce(result === "hit" ? ("Hit at " + cell.key + " — " + hitShip.n + (sunk ? (". You sank their " + sunk + "!") : "!")) : ("Miss at " + cell.key + "."));
       }).catch(function(e){
         session.error = "Couldn't send that shot (" + describeError(e) + "). Check your connection and try again.";
         renderBattle();
@@ -776,12 +791,29 @@
     }).join("");
   }
 
+  function renderOpponentHits(myShots){
+    if(myShots.length===0) return '<li class="fine">No shots fired yet.</li>';
+    var hits = myShots.filter(function(e){ return e.result==="hit"; });
+    var misses = myShots.filter(function(e){ return e.result==="miss"; });
+    var sunkNames = myShots.filter(function(e){ return e.sunk; }).map(function(e){ return e.sunk; });
+    var rows = '<li>' + myShots.length + ' shots fired — ' + hits.length + ' hit' + (hits.length===1?"":"s") + ', ' + misses.length + ' miss' + (misses.length===1?"":"es") + '.</li>';
+    if(sunkNames.length){
+      rows += '<li>Sunk so far: ' + sunkNames.join(", ") + '.</li>';
+    }
+    if(hits.length){
+      rows += hits.map(function(e){
+        return "<li>" + e.cell + " — hit on " + e.ship + (e.sunk ? (" — sunk!") : "") + "</li>";
+      }).join("");
+    }
+    return rows;
+  }
+
   function renderLog(log){
     if(log.length===0) return '<li class="fine">No shots fired yet.</li>';
     return log.slice().reverse().map(function(e){
       var who = e.by === session.slot ? "You" : "Friend";
       var cls = e.result === "hit" ? "hit" : "miss";
-      return '<li class="' + cls + '">' + who + " fired on " + e.cell + ": " + e.result + (e.sunk ? (" — sank the " + e.sunk + "!") : "") + '</li>';
+      return '<li class="' + cls + '">' + who + " fired on " + e.cell + ": " + e.result + (e.result==="hit" ? (" — " + e.ship) : "") + (e.sunk ? (" (sunk!)") : "") + '</li>';
     }).join("");
   }
 
