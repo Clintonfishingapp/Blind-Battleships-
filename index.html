@@ -50,12 +50,30 @@
   .visible-announce{ background:var(--navy-2); border:1px solid var(--coral); border-radius:8px; padding:12px 14px; margin-bottom:16px; font-size:15px; }
   .ship-list{ font-size:14px; color:#CFE0EF; margin:0 0 14px; padding-left:18px; }
   .fine{ font-size:13px; color:#7FA0C4; }
+  .voice-toggle{
+    display:block;
+    width:100%;
+    font-size:17px;
+    font-weight:600;
+    padding:14px 18px;
+    margin:0 0 24px;
+    border-radius:10px;
+    border:2px solid var(--coral);
+    background:var(--navy-2);
+    color:var(--cream);
+  }
+  .voice-toggle[aria-pressed="false"]{
+    border-color:var(--line);
+    color:#7FA0C4;
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>Blind battleships online</h1>
   <p class="tag">Two boards, one game, any distance apart — updates automatically.</p>
+
+  <button type="button" id="voiceToggleBtn" class="voice-toggle" aria-pressed="true">Voice: On</button>
 
   <div id="app"></div>
 
@@ -80,7 +98,10 @@
 
   var COLS = "ABCDEFGHIJ";
   var SHIPS = [
-    {name:"Destroyer", len:2}
+    {name:"Destroyer", len:2},
+    {name:"Submarine", len:3},
+    {name:"Cruiser", len:3},
+    {name:"Battleship", len:4}
   ];
   var TOTAL_CELLS = SHIPS.reduce(function(a,s){return a+s.len;},0);
 
@@ -110,9 +131,36 @@
   var lastLogLen = -1;
   var startAttempted = false;
 
+  var voiceEnabled = localStorage.getItem("bb3_voice") !== "off";
+  var voiceBtn = document.getElementById("voiceToggleBtn");
+  function updateVoiceBtn(){
+    voiceBtn.textContent = voiceEnabled ? "Voice: On" : "Voice: Off";
+    voiceBtn.setAttribute("aria-pressed", voiceEnabled ? "true" : "false");
+  }
+  updateVoiceBtn();
+  voiceBtn.onclick = function(){
+    voiceEnabled = !voiceEnabled;
+    localStorage.setItem("bb3_voice", voiceEnabled ? "on" : "off");
+    if(!voiceEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
+    updateVoiceBtn();
+    live.textContent = "";
+    setTimeout(function(){ live.textContent = voiceEnabled ? "Voice on." : "Voice off. Screen reader announcements still work as normal."; }, 30);
+  };
+
+  function speak(text){
+    if(!voiceEnabled) return;
+    try{
+      if(window.speechSynthesis){
+        window.speechSynthesis.cancel();
+        var utter = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utter);
+      }
+    }catch(e){ /* speech not available — the aria-live region still covers screen readers */ }
+  }
   function announce(text){
     live.textContent = "";
     setTimeout(function(){ live.textContent = text; }, 30);
+    speak(text);
   }
   function otherSlot(s){ return s === "p1" ? "p2" : "p1"; }
   function escapeHtml(s){
@@ -165,6 +213,26 @@
     var set = {};
     fleet.forEach(function(s){ s.cells.forEach(function(c){ set[c]=true; }); });
     return set;
+  }
+  function randomPlaceFleet(){
+    var fleet = [];
+    SHIPS.forEach(function(ship){
+      var placed = false;
+      var attempts = 0;
+      while(!placed && attempts < 300){
+        attempts++;
+        var orient = Math.random() < 0.5 ? "H" : "V";
+        var col = Math.floor(Math.random() * 10);
+        var row = Math.floor(Math.random() * 10) + 1;
+        var cells = shipCells({col:col, row:row, orient:orient}, ship.len);
+        if(!cells) continue;
+        var occupied = fleetOccupied(fleet);
+        if(cells.some(function(c){ return occupied[c]; })) continue;
+        fleet.push({name: ship.name, len: ship.len, cells: cells});
+        placed = true;
+      }
+    });
+    return fleet;
   }
   function describeError(e){
     if(e && e.code) return e.code;
@@ -477,7 +545,8 @@
     if(roomDoc.log.length > prevLen){
       var newest = roomDoc.log[roomDoc.log.length - 1];
       if(newest.by !== session.slot){
-        if(newest.result === "hit") playExplosion();
+        playWhistle();
+        if(newest.result === "hit") setTimeout(playExplosion, 900);
         announce("Your friend fired on " + newest.cell + ": " + newest.result + (newest.sunk ? (", sinking your " + newest.sunk + "!") : "."));
       }
     }
@@ -490,11 +559,11 @@
     "Rows are lettered A to J, top to bottom. " +
     "Columns are numbered 1 to 10, left to right. " +
     "Every cell is one letter followed by one number, for example C4 or J10. " +
-    "To place a ship, type the starting cell, then a space, then the letter H for horizontal or the letter V for vertical. " +
-    "Example: D7 H means start at row D, column 7, going horizontal, across the columns to the right. " +
-    "Example: D7 V means start at row D, column 7, going vertical, down through the rows.";
+    "Your fleet will be placed for you automatically in random, valid positions. " +
+    "When you fire later, you'll type a cell the same way: one letter then one number, for example D7.";
 
   function renderLayout(){
+    var shipListText = SHIPS.map(function(s){ return s.name + " (" + s.len + " cells)"; }).join(", ");
     app.innerHTML =
       '<div class="panel">' +
         '<h2>Board layout</h2>' +
@@ -503,16 +572,17 @@
           '<li>Rows are lettered A to J, top to bottom.</li>' +
           '<li>Columns are numbered 1 to 10, left to right.</li>' +
           '<li>Every cell is one letter then one number. Example: C4 or J10.</li>' +
-          '<li>To place a ship, type the exact format: cell, space, then H for horizontal or V for vertical.</li>' +
-          '<li>Example: D7 H — start at row D, column 7, going horizontal (across the columns, to the right).</li>' +
-          '<li>Example: D7 V — start at row D, column 7, going vertical (down through the rows).</li>' +
+          '<li>Your fleet is placed for you automatically, in a random valid layout.</li>' +
+          '<li>Later, to fire, you will type a cell the same way — one letter, one number. Example: D7.</li>' +
         '</ul>' +
-        '<p class="status">There is 1 ship to place for this test game: Destroyer (2 cells).</p>' +
-        '<button type="button" class="primary" id="layoutContinueBtn">I understand — start placing ships</button>' +
+        '<p class="status">There are ' + SHIPS.length + ' ships in your fleet: ' + shipListText + '.</p>' +
+        '<button type="button" class="primary" id="layoutContinueBtn">Place my fleet automatically</button>' +
       '</div>';
     focusHeading();
-    announce(LAYOUT_TEXT + " There is 1 ship to place for this test game. Destroyer, 2 cells.");
+    announce(LAYOUT_TEXT + " There are " + SHIPS.length + " ships in your fleet. " + shipListText.replace(/,/g, ".") + ".");
     document.getElementById("layoutContinueBtn").onclick = function(){
+      session.fleet = randomPlaceFleet();
+      session.shipIdx = SHIPS.length;
       session.phase = "placement";
       render();
     };
@@ -524,16 +594,20 @@
       app.innerHTML =
         '<div class="panel">' +
           '<h2>Fleet placed</h2>' +
-          '<p class="status">All ' + SHIPS.length + ' ship(s) are down. Review, then start the battle.</p>' +
+          '<p class="status">Your fleet has been placed automatically. Review, then start the battle — or shuffle for a new random layout.</p>' +
           '<ul class="ship-list">' + session.fleet.map(function(s){
             return "<li>" + s.name + " (" + s.len + " cells): " + s.cells.join(", ") + "</li>";
           }).join("") + '</ul>' +
-          '<button type="button" id="undoBtn">Remove last ship</button>' +
+          '<button type="button" id="shuffleBtn">Shuffle — place again</button>' +
           '<button type="button" class="primary" id="readyBtn">Start battle</button>' +
         '</div>';
       focusHeading();
-      document.getElementById("undoBtn").onclick = function(){
-        session.fleet.pop(); session.shipIdx--; render();
+      announce("Your fleet has been placed. " + session.fleet.map(function(s){
+        return s.name + " at " + s.cells.join(", ");
+      }).join(". ") + ". Start the battle, or shuffle for a new layout.");
+      document.getElementById("shuffleBtn").onclick = function(){
+        session.fleet = randomPlaceFleet();
+        render();
       };
       document.getElementById("readyBtn").onclick = onReady;
       return;
@@ -682,7 +756,7 @@
       var nextTurn = winner ? st.turn : otherSlot(session.slot);
 
       roomRef.update({log: newLog, winner: winner, turn: nextTurn}).then(function(){
-        if(result === "hit") playExplosion();
+        if(result === "hit") setTimeout(playExplosion, 900);
         announce(result === "hit" ? ("Hit at " + cell.key + (sunk ? (". You sank their " + sunk + "!") : "!")) : ("Miss at " + cell.key + "."));
       }).catch(function(e){
         session.error = "Couldn't send that shot (" + describeError(e) + "). Check your connection and try again.";
